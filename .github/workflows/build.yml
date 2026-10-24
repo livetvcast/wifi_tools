@@ -13,18 +13,15 @@ jobs:
       - name: Find and unpack project
         run: |
           shopt -s nullglob
-          echo "Files in repo root:"; ls -la
           if [ -f settings.gradle.kts ]; then
             PD="."
           else
             ZIP=$(for f in *.zip; do echo "$(git log -1 --format=%ct -- "$f") $f"; done | sort -n | tail -1 | cut -d' ' -f2-)
-            if [ -z "$ZIP" ]; then echo "ERROR: no .zip file found in repo root"; exit 1; fi
-            echo "Using zip: $ZIP"
+            if [ -z "$ZIP" ]; then echo "ERROR: no .zip file found"; exit 1; fi
             mkdir -p proj
             unzip -o "$ZIP" -d proj
             PD=$(dirname "$(find proj -name settings.gradle.kts | head -n 1)")
           fi
-          echo "Project dir: $PD"
           echo "PROJECT_DIR=$PD" >> "$GITHUB_ENV"
 
       - uses: actions/setup-java@v4
@@ -38,7 +35,19 @@ jobs:
 
       - name: Build debug APK
         working-directory: ${{ env.PROJECT_DIR }}
-        run: gradle assembleDebug --no-daemon
+        run: |
+          set +e
+          gradle assembleDebug --no-daemon --console=plain > build.log 2>&1
+          code=$?
+          if [ $code -ne 0 ]; then
+            grep -E "^e: " build.log | sed -E 's#^e: file://.*/com/wifitools/app/##' | sort -u > errs.txt
+            head -n 10 errs.txt | while IFS= read -r l; do echo "::error::$l"; done
+            { echo '### Compile errors'; echo '```'; head -n 60 errs.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+            if [ ! -s errs.txt ]; then
+              grep -E "error|wrong" build.log | head -n 8 | while IFS= read -r l; do echo "::error::$l"; done
+            fi
+          fi
+          exit $code
 
       - uses: actions/upload-artifact@v4
         with:
